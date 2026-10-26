@@ -1,0 +1,33 @@
+# Private input profiles and local deployment settings
+/config/
+/config.yaml
+/config.yml
+*.local.yaml
+*.local.yml
+.env
+.env.*
+!.env.example
+
+# Runtime data and local kernel/database assets
+/data/
+/runtime/
+/assets/
+/clash
+/mihomo
+*.mmdb
+*.dat
+*.db
+*.db-*
+*.log
+nohup.out
+
+# Build output and editor files
+/dist/
+/build/
+__pycache__/
+*.py[cod]
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
