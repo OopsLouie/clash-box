@@ -2,6 +2,7 @@ name: clash-box
 
 services:
   mihomo:
+    container_name: clash-box-mihomo
     # 直接使用官方镜像；.env 可以覆盖版本，未设置时使用这里的默认版本。
     image: metacubex/mihomo:${MIHOMO_VERSION:-v1.19.33}
     # 异常退出或 Docker 重启后恢复；手动停止的服务保持停止。
@@ -44,6 +45,7 @@ services:
         max-file: "3"
 
   dashboard:
+    container_name: clash-box-dashboard
     # 官方 MetaCubeXD 面板；只管理现有内核，不包含第二个代理内核。
     image: ghcr.io/metacubex/metacubexd:v1.273.1
     pull_policy: missing
