@@ -15,6 +15,8 @@ services:
       # 7890 同时支持 HTTP/SOCKS5；7891 兼容原有 SOCKS5 客户端。
       - "${PROXY_BIND_IP:-0.0.0.0}:${MIXED_PORT:-7890}:7890/tcp"
       - "${PROXY_BIND_IP:-0.0.0.0}:${SOCKS_PORT:-7891}:7891/tcp"
+      # 面板通过管理 API 控制内核；API 使用 start.sh 生成的密钥。
+      - "${PROXY_BIND_IP:-0.0.0.0}:${CONTROLLER_PORT:-19090}:9090/tcp"
     volumes:
       # 挂载生成配置的目录，便于 start.sh 校验临时文件并原子替换运行文件。
       - type: bind
@@ -27,14 +29,35 @@ services:
       - type: volume
         source: mihomo-data
         target: /root/.config/mihomo
-    # 只检查代理监听是否就绪；节点和外网连通性需要另外验证。
+    # 等待代理和管理 API 就绪；外网连通性需要另外验证。
     healthcheck:
-      test: ["CMD-SHELL", "nc -z -w 2 127.0.0.1 7890 && nc -z -w 2 127.0.0.1 7891"]
+      test: ["CMD-SHELL", "nc -z -w 2 127.0.0.1 7890 && nc -z -w 2 127.0.0.1 7891 && nc -z -w 2 127.0.0.1 9090"]
       interval: 5s
       timeout: 5s
       retries: 3
       start_period: 3s
     # 日志自动轮转，最多保留 3 个 10MB 文件。
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  dashboard:
+    # 官方 MetaCubeXD 面板；只管理现有内核，不包含第二个代理内核。
+    image: ghcr.io/metacubex/metacubexd:latest
+    restart: unless-stopped
+    depends_on:
+      mihomo:
+        condition: service_healthy
+    ports:
+      - "${PROXY_BIND_IP:-0.0.0.0}:${DASHBOARD_PORT:-8080}:80/tcp"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:80/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     logging:
       driver: local
       options:

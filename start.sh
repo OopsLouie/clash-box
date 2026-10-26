@@ -8,7 +8,7 @@ usage() {
   ./start.sh /路径/服务商配置.yaml   导入配置，自动适配并后台启动
   ./start.sh                       使用 config/config.yaml，或根目录 config.yaml
 
-需要 Docker 和 Docker Compose v2。首次运行会下载官方 Mihomo 和 yq 镜像。
+需要 Docker 和 Docker Compose v2。首次运行会下载代理、面板和 YAML 工具镜像。
 可选 .env 用于修改宿主机端口；已有 Clash 时可设为 17890 / 17891。
 HELP
 }
@@ -75,11 +75,25 @@ info '准备镜像（已下载的镜像会复用）……'
 if ! docker image inspect "$yq_image" >/dev/null 2>&1; then
   docker pull "$yq_image" || die '下载 yq 镜像失败，请检查 Docker 的网络连接。'
 fi
-"${compose[@]}" pull --policy missing mihomo || die '下载 Mihomo 镜像失败，请检查 Docker 的网络连接。'
+"${compose[@]}" pull --policy missing mihomo dashboard || die '下载代理或面板镜像失败，请检查 Docker 的网络连接。'
+
+secret_file=$repo_dir/runtime/secret
+if [[ ! -e $secret_file ]]; then
+  info '生成管理密钥……'
+  docker run --rm --network none --log-driver none --entrypoint /bin/sh "$yq_image" \
+    -c 'od -An -N32 -tx1 /dev/urandom | tr -d " \n"' > "$work_dir/secret" ||
+    die '无法生成管理密钥。'
+  mv -- "$work_dir/secret" "$secret_file"
+fi
+[[ -f $secret_file && -r $secret_file ]] || die "无法读取管理密钥：$secret_file"
+admin_secret=$(< "$secret_file")
+[[ $admin_secret =~ ^[a-f0-9]{64}$ ]] || die "管理密钥文件无效：$secret_file"
+chmod 600 "$secret_file"
 
 info '生成适合本机和局域网使用的运行配置……'
 filter=$(< "$repo_dir/scripts/prepare-config.yq")
-if ! docker run --rm --interactive --network none --log-driver none "$yq_image" \
+if ! CLASH_BOX_SECRET=$admin_secret docker run --rm --interactive --network none --log-driver none \
+  --env CLASH_BOX_SECRET "$yq_image" \
   --yaml-fix-merge-anchor-to-spec eval-all --no-colors --exit-status "$filter" - \
   < "$work_dir/source.yaml" > "$work_dir/config.yaml" 2>> "$log_file"; then
   die "配置必须是单份有效的 Clash/Mihomo YAML 映射。详情见 $log_file；当前运行配置未替换。"
@@ -102,20 +116,20 @@ was_running=$("${compose[@]}" ps --quiet --status running mihomo)
 mv -- "$work_dir/config.yaml" "$runtime_file"
 promoted=true
 
-info '后台启动，等待代理端口就绪……'
-if ! "${compose[@]}" up -d --force-recreate --wait --wait-timeout 45 mihomo; then
-  "${compose[@]}" logs --tail=50 mihomo >> "$log_file" 2>&1 || true
+info '后台启动，等待代理和网页面板就绪……'
+if ! "${compose[@]}" up -d --force-recreate --wait --wait-timeout 60; then
+  "${compose[@]}" logs --tail=50 >> "$log_file" 2>&1 || true
   restore_config
   promoted=false
   if [[ $had_previous == true && -n $was_running ]]; then
     info '新配置启动失败，尝试恢复原服务……'
-    if ! "${compose[@]}" up -d --force-recreate --wait --wait-timeout 45 mihomo >> "$log_file" 2>&1; then
+    if ! "${compose[@]}" up -d --force-recreate --wait --wait-timeout 60 >> "$log_file" 2>&1; then
       printf '原配置已恢复，服务恢复失败；请检查日志：%s\n' "$log_file" >&2
     fi
   else
-    "${compose[@]}" stop mihomo >> "$log_file" 2>&1 || true
+    "${compose[@]}" stop >> "$log_file" 2>&1 || true
   fi
-  die "启动失败。请检查端口是否被占用及 $log_file。已有 Clash 时可在 .env 将端口改为 17890 / 17891。"
+  die "启动失败。请检查端口及 $log_file。已有 Clash 时可在 .env 将代理端口改为 17890 / 17891。"
 fi
 
 # 只在成功启动后保存未经修改的服务商配置副本，供下次无参数启动。
@@ -126,4 +140,14 @@ printf 'HTTP/SOCKS5 入口：%s\n' "$("${compose[@]}" port mihomo 7890)"
 printf 'SOCKS5 兼容入口：%s\n' "$("${compose[@]}" port mihomo 7891)"
 printf '本机填写 127.0.0.1；局域网设备填写这台主机的局域网 IP。\n'
 printf '若 .env 限定了绑定 IP，本机也使用该 IP。\n'
+dashboard_endpoint=$("${compose[@]}" port dashboard 80)
+dashboard_host=${dashboard_endpoint%:*}
+[[ $dashboard_host != 0.0.0.0 ]] || dashboard_host=127.0.0.1
+controller_endpoint=$("${compose[@]}" port mihomo 9090)
+controller_host=${controller_endpoint%:*}
+[[ $controller_host != 0.0.0.0 ]] || controller_host=127.0.0.1
+printf '管理面板：http://%s:%s/\n' "$dashboard_host" "${dashboard_endpoint##*:}"
+printf '首次登录的后端地址：http://%s:%s\n' "$controller_host" "${controller_endpoint##*:}"
+printf '管理密钥：%s\n' "$admin_secret"
+printf '密钥保存在 runtime/secret；局域网访问时将面板和后端地址中的主机改为本机局域网 IP。\n'
 printf '查看状态：docker compose ps\n查看日志：docker compose logs -f --tail=100 mihomo\n'

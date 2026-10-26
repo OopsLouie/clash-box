@@ -1,5 +1,6 @@
 # 仅接受单个 YAML 文档，顶层必须是映射；拒绝 HTML、订阅字符串和数组。
 [.] | select(length == 1) | .[0] | select(tag == "!!map") |
+select(strenv(CLASH_BOX_SECRET) != "") |
 # 展开锚点后再修改入口，避免复用锚点时意外改动节点等其他配置。
 explode(.) |
 .port = 0 |
@@ -9,7 +10,15 @@ explode(.) |
 ."bind-address" = "*" |
 ."lan-allowed-ips" = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] |
 ."lan-disallowed-ips" = [] |
-."external-controller" = "" |
+."external-controller" = "0.0.0.0:9090" |
+.secret = strenv(CLASH_BOX_SECRET) |
+."external-ui" = "" |
+."external-ui-name" = "" |
+."external-ui-url" = "" |
+."external-controller-cors"."allow-origins" = ["*"] |
+."external-controller-cors"."allow-private-network" = true |
+."external-doh-server" = "" |
+.profile."store-selected" = true |
 ."external-controller-tls" = "" |
 ."external-controller-unix" = "" |
 ."external-controller-pipe" = "" |
