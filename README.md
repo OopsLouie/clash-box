@@ -47,8 +47,10 @@ docker compose ps
 docker compose logs -f --tail=100 mihomo
 
 # 停止服务，保留数据
-docker compose down
+./stop.sh
 ```
+
+停止会保留配置、管理密钥、数据卷和容器日志，再次启动使用 `./start.sh`。
 
 新配置校验失败时，已有服务继续运行。失败详情见 `runtime/start.log`。启动就绪表示代理和管理面板已准备好，上游节点是否可用仍取决于服务商配置。
 

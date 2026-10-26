@@ -38,7 +38,7 @@ docker info >/dev/null 2>&1 || die '无法连接 Docker，请检查 Docker 是�
 cd -- "$repo_dir"
 mkdir -p config runtime
 lock_dir=$repo_dir/runtime/.start.lock
-mkdir "$lock_dir" 2>/dev/null || die "已有启动任务，或启动锁未清理：$lock_dir"
+mkdir "$lock_dir" 2>/dev/null || die "已有启动或停止任务，或操作锁未清理：$lock_dir"
 work_dir=''
 runtime_file=$repo_dir/runtime/config.yaml
 had_previous=false
@@ -150,4 +150,4 @@ printf '管理面板：http://%s:%s/\n' "$dashboard_host" "${dashboard_endpoint#
 printf '首次登录的后端地址：http://%s:%s\n' "$controller_host" "${controller_endpoint##*:}"
 printf '管理密钥：%s\n' "$admin_secret"
 printf '密钥保存在 runtime/secret；局域网访问时将面板和后端地址中的主机改为本机局域网 IP。\n'
-printf '查看状态：docker compose ps\n查看日志：docker compose logs -f --tail=100 mihomo\n'
+printf '查看状态：docker compose ps\n查看日志：docker compose logs -f --tail=100 mihomo\n停止服务：./stop.sh\n'
