@@ -8,8 +8,9 @@
 .env.*
 !.env.example
 
-# Runtime data and local kernel/database assets
+# Runtime data, private backups, and local kernel/database assets
 /data/
+/backups/
 /runtime/
 /assets/
 /clash

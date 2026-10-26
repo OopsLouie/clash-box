@@ -1,136 +1,112 @@
-# clash-box 设计
+# clash-box 部署设计
 
-状态：设计阶段。用户已选择 Mihomo，使用范围为本机和局域网设备。
+## 定位
 
-## 目标与边界
+这是个人 Mihomo 部署配置仓库。运行核心由官方镜像提供，仓库维护 Compose 配置、脱敏示例、使用说明和版本选择。用户提供完整的 Clash/Mihomo YAML，首次适配部署相关字段后启动。
 
-提供一个通用镜像，用户在运行时挂载自己的 Clash/Mihomo YAML 配置即可启动代理。镜像不包含用户节点和订阅凭据，同一镜像可用于不同配置。
+第一版面向当前 Linux 主机，同时服务本机和局域网设备。使用系统或应用显式设置的 HTTP/SOCKS5 代理。官方镜像的其他平台支持可按部署设备单独验证。
 
-第一版提供显式 HTTP/SOCKS5 代理。局域网设备需在系统或应用中设置代理地址；应用是否遵循系统代理取决于客户端。整机流量接管、旁路由、TUN 和自动修改宿主机路由属于后续独立功能。
-
-第一版支持完整的单文件 YAML。订阅链接自动更新、多配置管理和配置引用的外部文件另行扩展；不能把任意 OpenVPN/WireGuard 文件直接当作 Clash YAML 使用。
-
-## 当前环境与可行性
-
-已检查 `~/clash`，未改动其中的文件或正在运行的进程：
-
-| 项目 | 现状 | 对设计的影响 |
-| --- | --- | --- |
-| 内核 | Clash 2023.08.17，Linux amd64，静态链接 | 现有运行环境简单；迁移后改用固定版本 Mihomo |
-| 配置 | `config.yaml`，包含节点、策略组和分流规则 | 适合单文件只读挂载 |
-| HTTP / SOCKS | `127.0.0.1:7890` / `127.0.0.1:7891` | 测试容器使用其他宿主机端口，避免冲突 |
-| `allow-lan` | `false` | 容器内需改为允许外部连接，宿主机再控制端口发布范围 |
-| 管理接口 | 监听 `0.0.0.0:9090`，未设置密钥 | 新方案的管理接口增加密钥，默认不发布到宿主机 |
-| 地理数据库 / 缓存 | 存在 `Country.mmdb` 和 `cache.db` | 镜像提供初始数据库，缓存使用独立数据卷 |
-| Docker / Compose | 已安装且 Docker 服务可访问 | 可直接开展构建和容器验证 |
-
-已在临时目录中复制配置和数据库，运行旧内核的 `-t` 检查，退出码为 0。尚未执行 Mihomo 的配置检查或真实代理验证；旧内核检查成功不等于已确认迁移兼容。
-
-## 结构
+## 部署结构
 
 ```mermaid
 flowchart LR
-    Local[本机应用] --> Entry[宿主机代理端口]
-    LAN[局域网设备] --> Entry
-    Entry --> Core[Docker 中的 Mihomo]
-    Input[只读用户配置] --> Merge[生成运行配置并校验]
-    Defaults[容器监听与端口设置] --> Merge
-    Merge --> Core
-    Core --> Nodes[用户配置中的代理节点]
+    Local[本机应用] --> Ports[Docker 主机代理端口]
+    LAN[局域网设备] --> Ports
+    Ports --> Core[官方 Mihomo 容器]
+    Config[本机 config/config.yaml] -->|只读挂载| Core
+    Data[Docker 持久数据卷] <--> Core
+    Core --> Nodes[配置中的代理节点]
     Core --> Direct[规则要求的直连目标]
-    Store[持久数据卷] <--> Core
 ```
 
-采用普通 Docker bridge 网络。此用法不需要 `privileged`、TUN 设备或修改宿主机路由。
+采用普通 bridge 网络，发布代理端口。此用法无需宿主机网络模式、TUN 设备或额外网络管理权限。
 
-计划交付以下文件，当前仅已创建仓库说明、设计和 Git 忽略规则：
+## 目录和职责
 
 ```text
 clash-box/
-├── Dockerfile
 ├── compose.yaml
-├── .dockerignore
-├── .gitignore
 ├── .env.example
+├── .gitignore
 ├── README.md
-├── docker/
-│   ├── entrypoint.sh
-│   └── prepare-config.*
 ├── examples/
 │   └── config.example.yaml
 └── docs/
-    └── design.md
+    ├── design.md
+    └── migration.md
 
-# 用户部署时提供，忽略提交：
+# 部署时创建，Git 忽略：
+.env
 config/config.yaml
+
+# Docker 管理，不在仓库目录内：
+# mihomo-data 命名卷
 ```
 
-### 镜像
-
-- 使用来自 Mihomo 官方发布渠道、经过验证的稳定版本，固定版本和校验值；实施时选定具体版本。
-- 包含 TLS CA 证书和与该版本匹配的基础地理数据库，启动不依赖临时下载这些基础资源。
-- 用户配置如果额外引用在线规则集或节点集，仍需要可访问对应来源；第一版先验证当前单文件配置。
-- 首先验证当前 Linux amd64 主机；arm64 作为后续构建目标，不直接复用旧的 amd64 二进制。
-- 普通代理以非 root 用户运行，运行缓存保存在可写数据卷中。
-
-### 配置与数据
-
-| 容器路径 | 用途 | 写入方式 |
+| 层次 | 内容 | 谁维护 |
 | --- | --- | --- |
-| `/input/config.yaml` | 用户原始配置 | 只读 bind mount |
-| `/var/lib/mihomo/config.yaml` | 合并容器设置后的运行配置 | 启动时生成 |
-| `/var/lib/mihomo/` | 数据库、缓存、节点选择状态和管理密钥 | 持久数据卷 |
+| 运行程序 | Mihomo 内核、镜像内证书及初始数据库 | 上游官方镜像 |
+| 部署配置 | 镜像版本、端口、挂载、重启和日志策略 | 本仓库 |
+| 代理配置 | 节点、凭据、分流、DNS、代理监听设置 | 本机私有 `config/config.yaml` |
+| 运行数据 | 数据库、缓存、节点选择状态 | Docker 命名卷及 Mihomo |
 
-入口程序使用 YAML 解析器合并配置，不用字符串替换修改 YAML。用户原始文件不回写，节点、策略组、规则和 DNS 语义保持不变；迁移不兼容项需单独验证和说明。
+真实配置仅运行时挂载，仓库不包含自建镜像或构建流程。第一版不引入配置合并脚本、包管理器和订阅转换服务。
 
-默认覆盖项如下：
+## 两份配置各管什么
 
-- `allow-lan: true` 和 `bind-address: "*"`，使宿主机端口转发和局域网请求能进入容器。
-- `port: 0`、`mixed-port: 7890`、`socks-port: 7891`，避免原 HTTP 端口与混合端口重复占用。
-- `external-controller: 0.0.0.0:9090`，使用数据卷中首次生成并持久保存的随机密钥；默认不向宿主机发布管理端口。
-- 第一版关闭 TUN、redir 和 tproxy 等透明代理入口。其他自定义监听器如有冲突，给出明确错误。
-- 限制代理入口允许访问的地址范围为本机及私有局域网范围；用户已有的代理认证保留，可通过部署设置进一步收紧来源和启用认证。实际来源地址须在 Docker 网络验证中检查。
+`.env` 是 Compose 的本地参数，包括官方镜像版本、宿主机端口、端口绑定 IPv4 地址和时区。它不会改写 `config.yaml`，也不会自动成为 Mihomo 的配置项。
 
-启动时先检查输入文件是否存在、是否为合法配置，再生成运行文件，执行 `mihomo -t`，通过后用 `exec` 启动内核，使 Docker 停止信号直接到达 Mihomo。缺失或无效配置要明确报错，日志不输出完整配置或凭据。
+`config/config.yaml` 由 Mihomo 原生读取。第一次从旧 Clash 复制时，手动调整监听设置：关闭原 `port`，使用 `mixed-port: 7890` 和 `socks-port: 7891`，开启 `allow-lan`，容器内绑定 `"*"`，关闭默认管理 API 和 TUN。其余配置先保持原样，再通过 Mihomo 校验兼容性。
 
-配置以只读文件挂载时，主机上通过原子替换更新文件可能改变 inode。第一版文档统一采用“替换配置后 `docker compose up -d --force-recreate`”的更新流程，以便重新挂载并重新生成运行配置。
+后续替换服务商提供的完整配置时，也需检查这些字段。随着使用经验增加，可以再评估 Mihomo 原生 `proxy-providers` 是否适合把可更新的节点集与固定部署配置分开。
 
-### 网络与客户端
+## 端口与访问
 
-| 用途 | 容器端口 | 宿主机发布方式 |
+| 用途 | 容器端口 | 默认宿主机端口 |
 | --- | --- | --- |
-| HTTP / SOCKS5 混合代理 | `7890/tcp` | 默认提供本机和局域网访问，支持设置绑定 IP 和宿主机端口 |
-| 兼容原 SOCKS5 入口 | `7891/tcp` | 默认保留，兼容当前客户端设置 |
-| 管理 API | `9090/tcp` | 默认不发布；需要时单独映射到 `127.0.0.1` |
+| HTTP / SOCKS5 混合代理 | `7890/tcp` | `7890` |
+| 兼容原 SOCKS5 入口 | `7891/tcp` | `7891` |
+| 管理 API | 默认关闭 | 不发布 |
 
-UDP 转发另行验证，第一版不宣称显式 HTTP/SOCKS 代理可以接管全部 UDP 流量。DNS 设置保留在 Mihomo 内部，不默认向局域网提供 DNS 服务。
+默认监听宿主机 IPv4 接口，以满足本机和局域网共同访问。可以设置 `PROXY_BIND_IP` 限定目标接口。容器内 `bind-address` 仍为 `"*"`，不能填写宿主机局域网 IP。
 
-客户端填写方式：
+代理配置示例允许本机和私有 IPv4 地址段；实际部署可收紧为所在网段，并使用 Mihomo 原生 `authentication`。Docker 对客户端来源地址的处理需在当前主机和局域网客户端上实测，访问范围不能只靠端口名称判断。
 
-- 本机：代理服务器为 `127.0.0.1`，端口 `7890`。
-- 局域网：代理服务器为 Docker 主机的局域网 IP，端口 `7890`；主机防火墙需允许目标局域网访问该 TCP 端口。
-- 同一 Docker 网络中的其他容器：使用 Compose 服务名 `clash:7890`，不填写 `127.0.0.1`。
+同一 Compose 网络中的应用可用 `mihomo:7890` 访问。第一版仅发布 TCP；UDP、整机代理、TUN 和旁路由按实际需求单独设计。
 
-默认发布代理端口以支持局域网；多网卡主机可通过可选 `.env` 设置绑定地址。管理接口和将来的 Web 面板独立控制访问范围。
+## 配置和数据的挂载
 
-## 实施顺序与验收
+- `./config/config.yaml` 只读挂载到 `/etc/mihomo/config.yaml`，使用 `-f` 显式指定。文件必须存在，禁止缺失时自动建目录。
+- `mihomo-data` 挂载到官方数据目录 `/root/.config/mihomo`，用 `-d` 显式指定。
+- 官方镜像包含初始地理数据库。首次创建空命名卷时 Docker 默认复制镜像目标目录中的内容；后续重建使用已有数据。
+- 镜像升级不覆盖已有卷内容。数据库需要更新时使用 Mihomo 原生配置或单独维护数据；内核版本和数据版本分别管理。
+- 用户代理配置单独备份；如依赖缓存、选择状态或本地规则集，也备份数据卷。常规停止使用 `docker compose down` 保留命名卷。
 
-1. 选定 Mihomo 版本，准备镜像和基础数据库；在隔离目录验证现有 YAML 兼容性。解析通过后仍需检查规则、DNS 与节点连接行为。
-2. 实现配置合并、Dockerfile、Compose、无真实凭据的示例配置和构建上下文排除规则。
-3. 用宿主机 `17890` / `17891` 启动测试容器，与仍在运行的旧 Clash 并行；通过 HTTP 和 SOCKS5 分别访问已知直连及代理目标。
-4. 确认启动失败提示、管理端口默认不发布、配置更新、重启后状态保留和正常停止。
-5. 从另一台局域网设备实测代理访问、访问范围和实际来源 IP。这一步需要一台可操作的客户端；容器本机检查不能替代局域网端到端验收。
-6. 验证完成后再安排正式端口切换；保留旧 Clash 和原配置作为回退入口。
+后续若配置引用本地规则或节点文件，需按其容器路径增加只读挂载；当前已有配置的节点和规则均在单文件中。
 
-容器存活或健康检查通过只说明本地服务可用，节点是否可用和外网是否畅通应由单独的连通性检查报告。
+## 版本和维护策略
 
-## 后续扩展
+Compose 默认使用明确的官方版本标签 `v1.19.33`，本地可在 `.env` 覆盖。该标签已核对存在于官方镜像仓库，但尚未在本机验证。初期固定正式版本，升级由人工选定并记录；需要更严格固定时可进一步锁定镜像 digest。
 
-按实际需要增加 Web 面板、订阅更新、arm64 镜像和 GitLab CI 镜像构建。TUN / 旁路由单独设计网络与权限配置。
+Docker 负责 `unless-stopped` 重启策略。日志使用带轮转的本地日志驱动，通过 Compose 查看。当前阶段不增加需要自定义镜像的探针或自动升级任务。
 
-## 参考资料
+维护操作统一为原生 Compose 命令：拉取镜像、用一次性容器执行 `-t`、启动、查看日志、重建和停止。配置替换后重建容器，确保文件 bind mount 指向新的文件。
 
-- [Mihomo 代理端口：HTTP、SOCKS 与 mixed-port](https://wiki.metacubex.one/en/config/inbound/port/)
-- [Mihomo 通用配置：局域网访问、认证和管理接口](https://wiki.metacubex.one/en/config/general/)
-- [Docker Compose 网络与服务名访问](https://docs.docker.com/compose/how-tos/networking/)
-- [Docker Compose 服务配置：端口映射与只读文件挂载](https://docs.docker.com/reference/compose-file/services/)
+## 迁移与验收
+
+当前 `~/clash` 的版本是 Clash 2023.08.17；原配置已在旧内核临时目录检查通过。Mihomo 对该配置的兼容性仍需验证。
+
+先用宿主机 `17890/17891` 与旧 Clash 并行验证，保留旧服务。依次检查新内核解析、本机 HTTP/SOCKS5、指定代理节点的真实连接、直连和分流，以及另一台局域网设备。旧服务使用的正式端口只在验证后切换，具体步骤见 [迁移说明](migration.md)。
+
+## 可选扩展
+
+需要浏览器切换节点时再增加管理 API 和 Web 面板。可以使用现有 MetaCubeXD 面板；管理 API 配置密钥，宿主机发布范围单独设置。需要节点自动更新时优先使用 Mihomo 原生 provider 能力。GitLab 先用于存储部署配置，无需镜像构建流水线。
+
+## 官方参考
+
+- [Mihomo 镜像与版本标签](https://hub.docker.com/r/metacubex/mihomo/tags)
+- [所选版本官方 Dockerfile：入口、证书、数据库和数据目录](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/Dockerfile)
+- [Mihomo 通用配置](https://wiki.metacubex.one/config/general/)
+- [Mihomo 代理端口](https://wiki.metacubex.one/config/inbound/port/)
+- [Docker Compose 服务配置](https://docs.docker.com/reference/compose-file/services/)
+- [Docker 数据卷的首次填充行为](https://docs.docker.com/engine/storage/volumes/)
