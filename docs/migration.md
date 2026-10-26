@@ -1,51 +1,48 @@
 # 从 ~/clash 迁移
 
-本说明用于后续执行迁移，当前尚未执行。旧 Clash 继续使用 `7890/7891`，并行验证的新容器使用 `17890/17891`。
+旧 Clash 继续使用 `7890/7891`，新容器使用 `17890/17891` 并行验证。无需改动原配置或停止旧进程。
 
-## 准备私有副本
+## 一键启动测试实例
 
-按 [README](../README.md) 复制原配置和 `.env.example`，只编辑仓库中的私有副本。配置中的节点、策略组、规则和 DNS 先保留，调整监听、局域网访问、管理接口和 TUN 设置。
-
-把 `.env` 中的两项改为：
+先复制 `.env.example` 为 `.env`，将两项改为：
 
 ```dotenv
 MIXED_PORT=17890
 SOCKS_PORT=17891
 ```
 
-首次验证不复制旧 `cache.db`，由 Mihomo 使用新数据卷。原文件和数据库继续供旧服务使用。
-
-## 校验并启动测试实例
+在仓库目录执行：
 
 ```bash
-docker compose config --quiet
-docker compose pull
-docker compose run --rm --no-deps mihomo -t -d /root/.config/mihomo -f /etc/mihomo/config.yaml
-docker compose up -d
-docker compose logs --tail=100 mihomo
+./start.sh ~/clash/config.yaml
 ```
 
-每一步成功后再执行下一步。`-t` 失败时先根据错误调整副本，不启动新服务；旧 Clash 的配置检查通过不能代替 Mihomo 检查。
+脚本自动读取、适配和校验配置，后台启动并等待代理入口就绪。原始文件保持不变；成功后保留副本供 `./start.sh` 再次使用。旧 `cache.db` 不复制，由新服务使用独立数据卷。
 
 ## 本机和局域网验证
 
-在本机选择用于验证的 HTTPS 目标，分别检查 HTTP 与 SOCKS5，例如：
+查看状态和日志：
+
+```bash
+docker compose ps
+docker compose logs --tail=100 mihomo
+```
+
+分别检查 HTTP 和 SOCKS5，例如：
 
 ```bash
 curl --fail --show-error --connect-timeout 10 --max-time 30 --noproxy '' --proxy http://127.0.0.1:17890 https://www.example.com/ -o /dev/null
 curl --fail --show-error --connect-timeout 10 --max-time 30 --noproxy '' --proxy socks5h://127.0.0.1:17891 https://www.example.com/ -o /dev/null
 ```
 
-这两项只检查代理入口和访问结果。应另外选择已知命中代理规则的目标，结合 Mihomo 日志确认实际使用代理节点；只有直连成功不能证明节点可用。再检查原先需要直连的目标是否仍按规则工作。
+若原配置启用了代理认证，客户端需提供对应账号密码。上述请求只确认入口和访问结果；另选已知命中代理规则的目标，结合日志验证实际代理节点，再验证直连目标。
 
-另一台局域网设备填写 Docker 主机的局域网 IP 和 `17890`，检查实际访问、访问范围以及主机防火墙。单机自测不能替代此项。
-
-配置更新后通过 README 中的检查和重建步骤验证其生效，再检查重启和正常停止。管理 API 不应发布到宿主机。
+另一台局域网设备填写 Docker 主机的局域网 IP 和 `17890`，检查实际访问及主机防火墙。单机自测不能替代此项。
 
 ## 正式切换与回退
 
-全部验证通过后，可继续使用新端口；如需沿用 `7890/7891`，先确认旧 Clash 的启动和恢复方式，安排停止旧进程，再把 `.env` 的端口改回 `7890/7891`，执行 `docker compose up -d` 并验证客户端。
+验证通过后可以继续使用新端口。需要沿用 `7890/7891` 时，先记录旧 Clash 的恢复方式，安排停止旧进程，再把 `.env` 端口改回 `7890/7891`，执行 `./start.sh`。
 
-保留 `~/clash` 全部原文件和服务启动方式。需要回退时先用 `docker compose down` 释放新服务端口，再按原来的启动方式恢复旧 Clash。当前阶段不自动停止旧服务或修改系统代理设置。
+需要恢复旧 Clash 时，先执行 `docker compose down` 释放新服务端口，再按原方式启动旧进程。保留 `~/clash` 全部原文件，脚本不会停止旧服务或修改系统代理。
 
-迁移成功后，本仓库只提交部署文件、文档和脱敏示例。`config/config.yaml`、`.env` 和数据卷备份留在私有备份位置。
+更新服务商配置时执行 `./start.sh /路径/新配置.yaml`。新配置未通过校验时，当前服务继续运行。后台启动失败会恢复旧运行配置并尝试恢复服务，但部署端口、镜像版本和数据卷需按实际情况回退。

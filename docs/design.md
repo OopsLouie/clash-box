@@ -1,112 +1,77 @@
 # clash-box 部署设计
 
-## 定位
+## 目标
 
-这是个人 Mihomo 部署配置仓库。运行核心由官方镜像提供，仓库维护 Compose 配置、脱敏示例、使用说明和版本选择。用户提供完整的 Clash/Mihomo YAML，首次适配部署相关字段后启动。
+使用者 clone 仓库、下载服务商的完整 Clash/Mihomo YAML 后，执行 `./start.sh /路径/配置.yaml` 即可后台启动，无需手动修改监听字段。运行核心直接使用官方 Mihomo 镜像。
 
-第一版面向当前 Linux 主机，同时服务本机和局域网设备。使用系统或应用显式设置的 HTTP/SOCKS5 代理。官方镜像的其他平台支持可按部署设备单独验证。
+本机和局域网设备通过系统或应用设置 HTTP/SOCKS5 代理。整机流量接管、旁路由、UDP 和 TUN 暂不纳入。
 
-## 部署结构
+## 启动流程
 
 ```mermaid
-flowchart LR
-    Local[本机应用] --> Ports[Docker 主机代理端口]
-    LAN[局域网设备] --> Ports
-    Ports --> Core[官方 Mihomo 容器]
-    Config[本机 config/config.yaml] -->|只读挂载| Core
-    Data[Docker 持久数据卷] <--> Core
-    Core --> Nodes[配置中的代理节点]
-    Core --> Direct[规则要求的直连目标]
+flowchart TD
+    Input[服务商 YAML 文件] --> Copy[建立临时副本]
+    Copy --> Adapt[一次性 yq 容器生成运行配置]
+    Adapt --> Check[Mihomo 临时容器校验]
+    Check -->|通过| Publish[原子替换运行配置]
+    Check -->|失败| Keep[保留现有配置和服务]
+    Publish --> Start[Compose 后台重建并等待监听就绪]
+    Start -->|成功| Save[保存原配置副本并显示代理入口]
+    Start -->|失败| Restore[恢复原运行配置并尝试恢复服务]
 ```
 
-采用普通 bridge 网络，发布代理端口。此用法无需宿主机网络模式、TUN 设备或额外网络管理权限。
+脚本只有 Bash 和 Docker/Compose 依赖。YAML 使用固定版本 `mikefarah/yq:4.54.1` 的一次性容器解析，不在宿主机安装工具，也不制作自定义镜像。工具容器从标准输入读取副本、向标准输出写生成配置，处理时禁用网络和 Docker 日志。
 
-## 目录和职责
+## 配置和数据
 
-```text
-clash-box/
-├── compose.yaml
-├── .env.example
-├── .gitignore
-├── README.md
-├── examples/
-│   └── config.example.yaml
-└── docs/
-    ├── design.md
-    └── migration.md
-
-# 部署时创建，Git 忽略：
-.env
-config/config.yaml
-
-# Docker 管理，不在仓库目录内：
-# mihomo-data 命名卷
-```
-
-| 层次 | 内容 | 谁维护 |
+| 位置 | 内容 | 更新方式 |
 | --- | --- | --- |
-| 运行程序 | Mihomo 内核、镜像内证书及初始数据库 | 上游官方镜像 |
-| 部署配置 | 镜像版本、端口、挂载、重启和日志策略 | 本仓库 |
-| 代理配置 | 节点、凭据、分流、DNS、代理监听设置 | 本机私有 `config/config.yaml` |
-| 运行数据 | 数据库、缓存、节点选择状态 | Docker 命名卷及 Mihomo |
+| 用户指定的源文件 | 下载的服务商配置 | 保持不变 |
+| `config/config.yaml` | 最近成功启动的服务商配置副本 | 启动成功后保存 |
+| `runtime/config.yaml` | 适合部署的运行配置 | 通过校验后原子替换 |
+| `runtime/start.log` | 校验和失败详情 | 每次启动重新生成 |
+| `.env` | 可选镜像版本、宿主机端口、绑定 IPv4 地址、时区 | 用户需要时设置 |
+| Docker 命名卷 | 数据库、缓存和状态 | Docker / Mihomo 管理 |
 
-真实配置仅运行时挂载，仓库不包含自建镜像或构建流程。第一版不引入配置合并脚本、包管理器和订阅转换服务。
+Compose 将 `runtime` 目录只读挂载到 `/etc/mihomo`，同时用于校验临时文件和读取正式配置；数据卷挂载到官方目录 `/root/.config/mihomo`。源配置、临时文件、生成配置、日志和 `.env` 不进入 Git。新建的私有目录和文件使用 `umask 077`。
 
-## 两份配置各管什么
+无参数时优先读取仓库的 `config/config.yaml`，其次读取根目录 `config.yaml`。带参数的相对路径在切换工作目录前解析，因此从其他目录执行也可用。启动锁防止两个脚本同时替换运行配置，正常退出和信号中断时清理临时文件及锁。
 
-`.env` 是 Compose 的本地参数，包括官方镜像版本、宿主机端口、端口绑定 IPv4 地址和时区。它不会改写 `config.yaml`，也不会自动成为 Mihomo 的配置项。
+## 自动适配范围
 
-`config/config.yaml` 由 Mihomo 原生读取。第一次从旧 Clash 复制时，手动调整监听设置：关闭原 `port`，使用 `mixed-port: 7890` 和 `socks-port: 7891`，开启 `allow-lan`，容器内绑定 `"*"`，关闭默认管理 API 和 TUN。其余配置先保持原样，再通过 Mihomo 校验兼容性。
+用 YAML 解析器确认只有一个文档且顶层为映射，展开锚点，再统一设置：
 
-后续替换服务商提供的完整配置时，也需检查这些字段。随着使用经验增加，可以再评估 Mihomo 原生 `proxy-providers` 是否适合把可更新的节点集与固定部署配置分开。
+- `port: 0`、`mixed-port: 7890`、`socks-port: 7891`。
+- `allow-lan: true`、`bind-address: "*"`，允许本机和私有 IPv4 地址段，清空会阻止这些请求的来源黑名单。
+- 关闭 HTTP/TLS/Unix/Pipe 管理入口、TUN、iptables 自动规则和 redir/tproxy。
 
-## 端口与访问
+节点、策略组、规则、DNS、账号及代理认证保留。未知字段由 Mihomo 最终校验；HTML、标量、数组和多文档输入在生成阶段拒绝。配置引用的额外本地文件需要用户另行挂载。
 
-| 用途 | 容器端口 | 默认宿主机端口 |
-| --- | --- | --- |
-| HTTP / SOCKS5 混合代理 | `7890/tcp` | `7890` |
-| 兼容原 SOCKS5 入口 | `7891/tcp` | `7891` |
-| 管理 API | 默认关闭 | 不发布 |
+## 后台运行和失败处理
 
-默认监听宿主机 IPv4 接口，以满足本机和局域网共同访问。可以设置 `PROXY_BIND_IP` 限定目标接口。容器内 `bind-address` 仍为 `"*"`，不能填写宿主机局域网 IP。
+Compose 使用 bridge 网络，将宿主机 `7890/7891` 默认映射到容器相同端口。`.env` 可只改变宿主机端口或绑定 IPv4 地址。管理 API 不发布，普通代理不申请额外网络权限。
 
-代理配置示例允许本机和私有 IPv4 地址段；实际部署可收紧为所在网段，并使用 Mihomo 原生 `authentication`。Docker 对客户端来源地址的处理需在当前主机和局域网客户端上实测，访问范围不能只靠端口名称判断。
+健康检查使用官方镜像自带的 `nc` 确认两个 TCP 代理入口可连接；脚本用 `up -d --force-recreate --wait` 等待就绪。它不证明上游节点或外网可用。Docker 负责 `unless-stopped` 重启策略和带轮转的本地日志。
 
-同一 Compose 网络中的应用可用 `mihomo:7890` 访问。第一版仅发布 TCP；UDP、整机代理、TUN 和旁路由按实际需求单独设计。
+解析失败或 Mihomo 校验失败不替换当前运行文件，也不重建已有服务。后台启动失败恢复旧运行文件；若原服务此前运行，尝试按当前部署参数恢复。端口和镜像版本不自动回退，恢复失败时明确报错。首次启动失败时停止失败的服务，避免重复重启。
 
-## 配置和数据的挂载
+源配置和运行配置分开，因此失败的更新不会污染上一份可用运行文件。升级或调整端口前仍应记录原 `.env` 和数据状态，必要时恢复相应部署参数再执行脚本。
 
-- `./config/config.yaml` 只读挂载到 `/etc/mihomo/config.yaml`，使用 `-f` 显式指定。文件必须存在，禁止缺失时自动建目录。
-- `mihomo-data` 挂载到官方数据目录 `/root/.config/mihomo`，用 `-d` 显式指定。
-- 官方镜像包含初始地理数据库。首次创建空命名卷时 Docker 默认复制镜像目标目录中的内容；后续重建使用已有数据。
-- 镜像升级不覆盖已有卷内容。数据库需要更新时使用 Mihomo 原生配置或单独维护数据；内核版本和数据版本分别管理。
-- 用户代理配置单独备份；如依赖缓存、选择状态或本地规则集，也备份数据卷。常规停止使用 `docker compose down` 保留命名卷。
+## 数据库与版本
 
-后续若配置引用本地规则或节点文件，需按其容器路径增加只读挂载；当前已有配置的节点和规则均在单文件中。
+固定官方标签 `v1.19.33`，可通过 `.env` 覆盖。官方镜像提供初始地理数据库，Docker 在首次创建空命名卷时复制镜像目录内容，后续继续使用该卷。镜像升级不会覆盖已存在的卷数据，数据库更新由 Mihomo 原生机制或单独维护处理。
 
-## 版本和维护策略
+## 验收
 
-Compose 默认使用明确的官方版本标签 `v1.19.33`，本地可在 `.env` 覆盖。该标签已核对存在于官方镜像仓库，但尚未在本机验证。初期固定正式版本，升级由人工选定并记录；需要更严格固定时可进一步锁定镜像 digest。
+真实 Docker 集成测试覆盖锚点及引号、保留节点与认证、从仓库外使用包含空格和中文的路径、HTTP/SOCKS5 请求、无参数重启、坏配置拒绝、启动失败恢复和并发锁。使用独立 Compose 项目及临时端口，测试后清理容器和数据卷。
 
-Docker 负责 `unless-stopped` 重启策略。日志使用带轮转的本地日志驱动，通过 Compose 查看。当前阶段不增加需要自定义镜像的探针或自动升级任务。
-
-维护操作统一为原生 Compose 命令：拉取镜像、用一次性容器执行 `-t`、启动、查看日志、重建和停止。配置替换后重建容器，确保文件 bind mount 指向新的文件。
-
-## 迁移与验收
-
-当前 `~/clash` 的版本是 Clash 2023.08.17；原配置已在旧内核临时目录检查通过。Mihomo 对该配置的兼容性仍需验证。
-
-先用宿主机 `17890/17891` 与旧 Clash 并行验证，保留旧服务。依次检查新内核解析、本机 HTTP/SOCKS5、指定代理节点的真实连接、直连和分流，以及另一台局域网设备。旧服务使用的正式端口只在验证后切换，具体步骤见 [迁移说明](migration.md)。
-
-## 可选扩展
-
-需要浏览器切换节点时再增加管理 API 和 Web 面板。可以使用现有 MetaCubeXD 面板；管理 API 配置密钥，宿主机发布范围单独设置。需要节点自动更新时优先使用 Mihomo 原生 provider 能力。GitLab 先用于存储部署配置，无需镜像构建流水线。
+用户当前旧 Clash 在 `7890/7891` 运行，新服务采用 `17890/17891` 并行验证。正式端口切换单独安排，不自动停止旧服务。跨物理设备的局域网访问仍需客户端实测，详见 [迁移说明](migration.md)。
 
 ## 官方参考
 
-- [Mihomo 镜像与版本标签](https://hub.docker.com/r/metacubex/mihomo/tags)
-- [所选版本官方 Dockerfile：入口、证书、数据库和数据目录](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/Dockerfile)
+- [Mihomo 官方镜像](https://hub.docker.com/r/metacubex/mihomo)
+- [所选版本的官方 Dockerfile](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/Dockerfile)
 - [Mihomo 通用配置](https://wiki.metacubex.one/config/general/)
-- [Mihomo 代理端口](https://wiki.metacubex.one/config/inbound/port/)
+- [yq 项目与 Docker 用法](https://github.com/mikefarah/yq)
 - [Docker Compose 服务配置](https://docs.docker.com/reference/compose-file/services/)
-- [Docker 数据卷的首次填充行为](https://docs.docker.com/engine/storage/volumes/)
+- [Docker 数据卷](https://docs.docker.com/engine/storage/volumes/)

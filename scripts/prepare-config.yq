@@ -1,0 +1,19 @@
+# 仅接受单个 YAML 文档，顶层必须是映射；拒绝 HTML、订阅字符串和数组。
+[.] | select(length == 1) | .[0] | select(tag == "!!map") |
+# 展开锚点后再修改入口，避免复用锚点时意外改动节点等其他配置。
+explode(.) |
+.port = 0 |
+."mixed-port" = 7890 |
+."socks-port" = 7891 |
+."allow-lan" = true |
+."bind-address" = "*" |
+."lan-allowed-ips" = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] |
+."lan-disallowed-ips" = [] |
+."external-controller" = "" |
+."external-controller-tls" = "" |
+."external-controller-unix" = "" |
+."external-controller-pipe" = "" |
+.tun.enable = false |
+.iptables.enable = false |
+."redir-port" = 0 |
+."tproxy-port" = 0

@@ -2,24 +2,39 @@ name: clash-box
 
 services:
   mihomo:
+    # 直接使用官方镜像；.env 可以覆盖版本，未设置时使用这里的默认版本。
     image: metacubex/mihomo:${MIHOMO_VERSION:-v1.19.33}
+    # 异常退出或 Docker 重启后恢复；手动停止的服务保持停止。
     restart: unless-stopped
+    # start.sh 生成运行配置；-d 指定可写数据目录，-f 指定只读运行配置。
     command: ["-d", "/root/.config/mihomo", "-f", "/etc/mihomo/config.yaml"]
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     ports:
+      # 宿主机地址:宿主机端口:容器端口。默认允许本机和局域网连接。
+      # 7890 同时支持 HTTP/SOCKS5；7891 兼容原有 SOCKS5 客户端。
       - "${PROXY_BIND_IP:-0.0.0.0}:${MIXED_PORT:-7890}:7890/tcp"
       - "${PROXY_BIND_IP:-0.0.0.0}:${SOCKS_PORT:-7891}:7891/tcp"
     volumes:
+      # 挂载生成配置的目录，便于 start.sh 校验临时文件并原子替换运行文件。
       - type: bind
-        source: ./config/config.yaml
-        target: /etc/mihomo/config.yaml
+        source: ./runtime
+        target: /etc/mihomo
         read_only: true
         bind:
           create_host_path: false
+      # 数据库和缓存保存在 Docker 数据卷，重建容器时继续使用。
       - type: volume
         source: mihomo-data
         target: /root/.config/mihomo
+    # 只检查代理监听是否就绪；节点和外网连通性需要另外验证。
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z -w 2 127.0.0.1 7890 && nc -z -w 2 127.0.0.1 7891"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 3s
+    # 日志自动轮转，最多保留 3 个 10MB 文件。
     logging:
       driver: local
       options:
@@ -27,4 +42,5 @@ services:
         max-file: "3"
 
 volumes:
+  # Docker 自动创建和管理；docker compose down 会保留这个卷。
   mihomo-data:

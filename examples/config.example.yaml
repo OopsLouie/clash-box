@@ -1,29 +1,10 @@
-# Deployment example only: no VPN nodes or credentials are included.
-# Adapt these settings in your private config/config.yaml and retain your nodes/rules/DNS.
-port: 0
-mixed-port: 7890
+# 仅用于演示的完整 YAML：没有可用 VPN 节点，规则均为直连。
+# 实际使用时执行 ./start.sh /路径/服务商配置.yaml，监听项由脚本自动适配。
+port: 7890
 socks-port: 7891
-allow-lan: true
-bind-address: "*"
-lan-allowed-ips:
-  - 127.0.0.0/8
-  - 10.0.0.0/8
-  - 172.16.0.0/12
-  - 192.168.0.0/16
-
+allow-lan: false
 mode: rule
 log-level: info
-external-controller: ""
-tun:
-  enable: false
-profile:
-  store-selected: true
-
-# Optional native proxy authentication (replace with your own credentials):
-# authentication:
-#   - "username:password"
-
-# Direct-only placeholders; replace with your actual provider configuration.
 proxies: []
 proxy-groups: []
 rules:
