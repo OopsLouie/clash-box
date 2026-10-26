@@ -45,7 +45,8 @@ services:
 
   dashboard:
     # 官方 MetaCubeXD 面板；只管理现有内核，不包含第二个代理内核。
-    image: ghcr.io/metacubex/metacubexd:latest
+    image: ghcr.io/metacubex/metacubexd:v1.273.1
+    pull_policy: missing
     restart: unless-stopped
     depends_on:
       mihomo:

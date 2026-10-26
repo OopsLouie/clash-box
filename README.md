@@ -10,7 +10,7 @@
 ./start.sh ~/Downloads/config.yaml
 ```
 
-把路径换成你下载的配置文件。脚本会自动调整配置、校验并后台启动 Mihomo 和 MetaCubeXD 网页面板，无需手动编辑 YAML。首次会下载所需镜像，关闭终端后代理仍然运行。
+把路径换成你下载的配置文件。脚本会自动调整配置、校验并后台启动 Mihomo 和 MetaCubeXD 网页面板，无需手动编辑 YAML。镜像版本已固定，首次下载后会复用本地镜像；关闭终端后代理仍然运行。
 
 原始下载文件保持不变，成功导入的副本保存在 `config/config.yaml`，生成的运行配置保存在 `runtime/config.yaml`。这些文件不会提交到 Git。
 
